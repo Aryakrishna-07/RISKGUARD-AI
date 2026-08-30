@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { scoreOrder, getDashboardMetrics, getModelPerformance, USE_MOCK } from "./api";
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 function ShieldIcon() {
@@ -172,14 +173,36 @@ function RiskScoring() {
   const [form, setForm] = useState({ orderId: "", customerId: "", value: "", payment: "credit_card" });
   const [scored, setScored] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    risk_score: number;
+    flagged_high_risk: boolean;
+    top_reasons: string[];
+  } | null>(null);
 
-  const score = 78;
-  const reasons = ["High order value (₹42,800)", "New account, first purchase", "Location risk — new region", "Unusual order pattern"];
+  const score = result ? Math.round(result.risk_score * 100) : 0;
+  const reasons = result?.top_reasons ?? [];
+  const riskLevel = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
 
-  function handleScore() {
+  async function handleScore() {
     if (!form.orderId && !form.value) return;
     setLoading(true);
-    setTimeout(() => { setLoading(false); setScored(true); }, 1200);
+    setError(null);
+    try {
+      const res = await scoreOrder({
+        orderId: form.orderId,
+        customerId: form.customerId,
+        value: Number(form.value) || 0,
+        payment: form.payment,
+      });
+      setResult(res);
+      setScored(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to score order");
+      setScored(false);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -191,12 +214,22 @@ function RiskScoring() {
         </h1>
         <span style={{
           fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", padding: "4px 10px",
-          background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.25)",
-          borderRadius: 100, color: "#FBBF24", display: "flex", alignItems: "center", gap: 5
+          background: USE_MOCK ? "rgba(251,191,36,0.12)" : "rgba(74,222,128,0.12)",
+          border: USE_MOCK ? "1px solid rgba(251,191,36,0.25)" : "1px solid rgba(74,222,128,0.25)",
+          borderRadius: 100, color: USE_MOCK ? "#FBBF24" : "#4ADE80", display: "flex", alignItems: "center", gap: 5
         }}>
-          <span style={{ fontSize: 8 }}>●</span> MOCK
+          <span style={{ fontSize: 8 }}>●</span> {USE_MOCK ? "MOCK" : "LIVE"}
         </span>
       </div>
+      {error && (
+        <div style={{
+          marginBottom: 16, padding: "10px 14px", borderRadius: 10,
+          background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)",
+          color: "#F87171", fontSize: 13,
+        }}>
+          {error}
+        </div>
+      )}
       <p style={{ fontSize: 14, color: "#9B95B0", marginBottom: 32, margin: "0 0 32px" }}>
         Evaluate an order and identify potential risk before fulfillment.
       </p>
@@ -296,15 +329,21 @@ function RiskScoring() {
                 <div style={{ position: "relative", display: "inline-block" }}>
                   <div style={{
                     position: "absolute", inset: -30,
-                    background: "radial-gradient(circle, rgba(248,113,113,0.2) 0%, transparent 70%)",
+                    background: `radial-gradient(circle, ${riskLevel === "high" ? "rgba(248,113,113,0.2)" : riskLevel === "medium" ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)"} 0%, transparent 70%)`,
                     borderRadius: "50%", filter: "blur(16px)"
                   }} />
-                  <div style={{ fontSize: 72, fontWeight: 900, lineHeight: 1, color: "#F87171", position: "relative" }}>{score}</div>
+                  <div style={{
+                    fontSize: 72, fontWeight: 900, lineHeight: 1, position: "relative",
+                    color: riskLevel === "high" ? "#F87171" : riskLevel === "medium" ? "#FBBF24" : "#4ADE80",
+                  }}>{score}</div>
                 </div>
                 <div className="eyebrow" style={{ marginTop: 8, color: "#9B95B0" }}>Risk Score</div>
                 <div style={{ marginTop: 12 }}>
-                  <span className="risk-badge-high" style={{ padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em" }}>
-                    🔴 HIGH RISK
+                  <span
+                    className={riskLevel === "high" ? "risk-badge-high" : riskLevel === "medium" ? "risk-badge-medium" : "risk-badge-low"}
+                    style={{ padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em" }}
+                  >
+                    {riskLevel === "high" ? "🔴 HIGH RISK" : riskLevel === "medium" ? "🟡 MEDIUM RISK" : "🟢 LOW RISK"}
                   </span>
                 </div>
               </div>
@@ -317,7 +356,10 @@ function RiskScoring() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {reasons.map((r, i) => (
                     <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ color: "#F87171", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>✓</span>
+                      <span style={{
+                        fontSize: 14, fontWeight: 700, flexShrink: 0,
+                        color: riskLevel === "high" ? "#F87171" : riskLevel === "medium" ? "#FBBF24" : "#4ADE80",
+                      }}>✓</span>
                       <span style={{ fontSize: 13, color: "#F4F2FA" }}>{r}</span>
                     </div>
                   ))}
@@ -332,27 +374,42 @@ function RiskScoring() {
 }
 
 // ── Screen 2: Dashboard ────────────────────────────────────────────────────
-const sparkData = {
-  orders: [60, 72, 65, 80, 78, 92, 88, 95, 100, 98, 110, 124],
-  highrisk: [8, 11, 9, 13, 10, 12, 11, 14, 13, 12, 13, 12],
-  loss: [40, 52, 48, 60, 65, 70, 68, 78, 80, 76, 84, 90],
-  avgrisk: [38, 36, 37, 35, 36, 34, 35, 33, 35, 34, 35, 34],
+type DashboardMetric = {
+  label: string;
+  value: string | number;
+  change?: string;
+  up?: boolean;
+  neutral?: boolean;
+  spark?: number[];
+  color?: "purple" | "green" | "red" | "amber";
 };
 
-const recentActivity = [
-  { id: "ORD-20240892", desc: "High-risk order detected", score: 78, level: "high" },
-  { id: "ORD-20240891", desc: "Medium-risk — new account", score: 51, level: "medium" },
-  { id: "ORD-20240890", desc: "Low-risk order cleared", score: 18, level: "low" },
-  { id: "ORD-20240889", desc: "High-risk — location anomaly", score: 83, level: "high" },
-];
+type ActivityRow = { id: string; desc: string; score: number; level: "high" | "medium" | "low" };
 
 function Dashboard() {
-  const metrics = [
-    { label: "Orders Analyzed", value: "12,482", change: "+12.4%", up: true, spark: sparkData.orders, color: "purple" as const },
-    { label: "High Risk", value: "1,284", change: "10.3%", up: false, neutral: true, spark: sparkData.highrisk, color: "red" as const },
-    { label: "Loss Prevented", value: "₹8.42L", change: "+18.7%", up: true, spark: sparkData.loss, color: "green" as const },
-    { label: "Avg Risk Score", value: "34.8", change: "-4.2%", up: true, spark: sparkData.avgrisk, color: "amber" as const },
-  ];
+  const [metrics, setMetrics] = useState<DashboardMetric[]>([]);
+  const [recentActivity, setRecentActivity] = useState<ActivityRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getDashboardMetrics()
+      .then((data) => {
+        if (cancelled) return;
+        setMetrics(data.metrics ?? []);
+        setRecentActivity(data.recent_activity ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load dashboard data");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div style={{ padding: "32px 36px", flex: 1, overflowY: "auto" }}>
@@ -363,21 +420,39 @@ function Dashboard() {
         Monitor order risk and model activity at a glance.
       </p>
 
+      {error && (
+        <div style={{
+          marginBottom: 20, padding: "10px 14px", borderRadius: 10,
+          background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)",
+          color: "#F87171", fontSize: 13,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p style={{ fontSize: 14, color: "#6B6485" }}>Loading dashboard…</p>
+      ) : (
+        <>
       {/* Metric cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${metrics.length || 1}, 1fr)`, gap: 16, marginBottom: 24 }}>
         {metrics.map((m, i) => (
           <div key={i} className="card" style={{ padding: 22 }}>
             <p className="eyebrow" style={{ marginBottom: 12 }}>{m.label}</p>
             <div style={{ fontSize: 30, fontWeight: 800, color: "#F4F2FA", lineHeight: 1, marginBottom: 6 }}>{m.value}</div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{
-                fontSize: 12, fontWeight: 600,
-                color: m.neutral ? "#9B95B0" : m.up ? "#4ADE80" : "#F87171"
-              }}>
-                {m.neutral ? "" : m.up ? "▲ " : "▼ "}{m.change}
-              </span>
-              <Sparkline values={m.spark} color={m.color} />
-            </div>
+            {(m.change || m.spark) && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                {m.change && (
+                  <span style={{
+                    fontSize: 12, fontWeight: 600,
+                    color: m.neutral ? "#9B95B0" : m.up ? "#4ADE80" : "#F87171"
+                  }}>
+                    {m.neutral ? "" : m.up ? "▲ " : "▼ "}{m.change}
+                  </span>
+                )}
+                {m.spark && <Sparkline values={m.spark} color={m.color} />}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -386,6 +461,9 @@ function Dashboard() {
       <div className="card" style={{ padding: 28 }}>
         <p className="eyebrow" style={{ marginBottom: 20 }}>Recent Risk Activity</p>
         <div style={{ display: "flex", flexDirection: "column" }}>
+          {recentActivity.length === 0 && (
+            <p style={{ fontSize: 13, color: "#6B6485", padding: "8px 0" }}>No orders scored yet.</p>
+          )}
           {recentActivity.map((row, i) => (
             <div key={i} style={{
               display: "flex", alignItems: "center", gap: 14, padding: "14px 0",
@@ -410,24 +488,57 @@ function Dashboard() {
           ))}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
 
 // ── Screen 3: Model Performance ────────────────────────────────────────────
-function ModelPerformance() {
-  const metrics = [
-    { label: "Precision", value: "87.4%", raw: 0.874 },
-    { label: "Recall", value: "81.2%", raw: 0.812 },
-    { label: "Accuracy", value: "89.6%", raw: 0.896 },
-    { label: "ROC-AUC", value: "0.91", raw: 0.91 },
-  ];
+type ModelPerfData = {
+  precision: number;
+  recall: number;
+  accuracy: number;
+  roc_auc: number;
+  true_positives: number;
+  false_positives: number;
+  f1_score: number;
+};
 
-  const bars = [
-    { label: "Precision", value: 87.4, display: "87.4%" },
-    { label: "Recall", value: 81.2, display: "81.2%" },
-    { label: "Accuracy", value: 89.6, display: "89.6%" },
-  ];
+function ModelPerformance() {
+  const [data, setData] = useState<ModelPerfData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getModelPerformance()
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load model performance"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const metrics = data ? [
+    { label: "Precision", value: `${(data.precision * 100).toFixed(1)}%`, raw: data.precision },
+    { label: "Recall", value: `${(data.recall * 100).toFixed(1)}%`, raw: data.recall },
+    { label: "Accuracy", value: `${(data.accuracy * 100).toFixed(1)}%`, raw: data.accuracy },
+    { label: "ROC-AUC", value: data.roc_auc.toFixed(2), raw: data.roc_auc },
+  ] : [];
+
+  const bars = data ? [
+    { label: "Precision", value: data.precision * 100, display: `${(data.precision * 100).toFixed(1)}%` },
+    { label: "Recall", value: data.recall * 100, display: `${(data.recall * 100).toFixed(1)}%` },
+    { label: "Accuracy", value: data.accuracy * 100, display: `${(data.accuracy * 100).toFixed(1)}%` },
+  ] : [];
+
+  const details = data ? [
+    { label: "True Positives", value: data.true_positives.toLocaleString() },
+    { label: "False Positives", value: data.false_positives.toLocaleString() },
+    { label: "F1 Score", value: data.f1_score.toFixed(3) },
+  ] : [];
 
   return (
     <div style={{ padding: "32px 36px", flex: 1, overflowY: "auto" }}>
@@ -438,6 +549,20 @@ function ModelPerformance() {
         Key performance indicators for the RiskGuard AI model.
       </p>
 
+      {error && (
+        <div style={{
+          marginBottom: 20, padding: "10px 14px", borderRadius: 10,
+          background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)",
+          color: "#F87171", fontSize: 13,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p style={{ fontSize: 14, color: "#6B6485" }}>Loading model performance…</p>
+      ) : (
+      <>
       {/* Metric cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
         {metrics.map((m, i) => (
@@ -495,11 +620,7 @@ function ModelPerformance() {
 
         {/* Bottom details row */}
         <div style={{ marginTop: 28, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-          {[
-            { label: "True Positives", value: "1,124" },
-            { label: "False Positives", value: "163" },
-            { label: "F1 Score", value: "0.842" },
-          ].map((s, i) => (
+          {details.map((s, i) => (
             <div key={i} className="card-inner" style={{ padding: "14px 18px" }}>
               <p className="eyebrow" style={{ marginBottom: 6 }}>{s.label}</p>
               <p style={{ fontSize: 20, fontWeight: 800, color: "#F4F2FA", margin: 0 }}>{s.value}</p>
@@ -507,6 +628,8 @@ function ModelPerformance() {
           ))}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
